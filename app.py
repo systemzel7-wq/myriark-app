@@ -78,6 +78,21 @@ def kirim_telegram(pesan):
         logging.error(f"Telegram failed: {e}")
 
 # ==========================================
+# PATCH 17: FUNGSI DELETE TIKET
+# ==========================================
+def hapus_tiket(ticket_id):
+    """Hapus tiket dari database"""
+    try:
+        supabase.table("tickets").delete().eq("ticket_id", ticket_id).execute()
+        st.success(f"✅ Tiket {ticket_id} berhasil dihapus!")
+        logging.info(f"Ticket deleted: {ticket_id}")
+        time.sleep(0.5)
+        st.rerun()
+    except Exception as e:
+        st.error(f"❌ Gagal menghapus tiket: {str(e)[:100]}")
+        logging.error(f"Delete Ticket Error: {e}")
+
+# ==========================================
 # 4. TAMPILAN ANTARMUKA (UI)
 # ==========================================
 
@@ -135,11 +150,64 @@ if tiket_aktif:
     else:
         kolom_wajib = ["ticket_id", "match", "entry_side", "entry_line", "entry_odds", "entry_stake"]
         kolom_tersedia = [k for k in kolom_wajib if k in df.columns]
-        st.dataframe(df[kolom_tersedia], use_container_width=True)
+        
+        # PATCH 17: Tambah kolom aksi (delete button)
+        st.write("Klik 🗑️ untuk menghapus tiket:")
+        for idx, tiket in enumerate(tiket_aktif):
+            col1, col2, col3, col4, col5, col6, col7 = st.columns([1.5, 1.5, 1.2, 1.2, 1.2, 1.5, 0.8])
+            with col1:
+                st.write(tiket.get("ticket_id", "N/A"))
+            with col2:
+                st.write(tiket.get("match", "N/A"))
+            with col3:
+                st.write(tiket.get("entry_side", "N/A").upper())
+            with col4:
+                st.write(f"{tiket.get('entry_line', 'N/A')}")
+            with col5:
+                st.write(f"{tiket.get('entry_odds', 'N/A')}")
+            with col6:
+                st.write(f"Rp {tiket.get('entry_stake', 0):,.0f}")
+            with col7:
+                if st.button("🗑️", key=f"delete_{tiket.get('ticket_id')}", help="Hapus tiket ini"):
+                    # PATCH 17: Konfirmasi sebelum delete
+                    if st.session_state.get(f"confirm_delete_{tiket.get('ticket_id')}", False):
+                        hapus_tiket(tiket.get("ticket_id"))
+                    else:
+                        st.session_state[f"confirm_delete_{tiket.get('ticket_id')}"] = True
+                        st.warning(f"Yakin ingin hapus tiket {tiket.get('ticket_id')}? Klik 🗑️ lagi untuk confirm.")
 else:
     st.info("Tidak ada tiket yang sedang berjalan.")
 
-# --- BAGIAN C: SCANNER ---
+# --- BAGIAN C: LIVE ODDS DISPLAY (PATCH 18) ---
+st.divider()
+st.subheader("📊 Live Odds Tersedia (EPL)")
+
+# PATCH 18: Session state untuk simpan live_market setiap scan
+if "live_market_data" not in st.session_state:
+    st.session_state.live_market_data = {}
+
+if st.session_state.live_market_data:
+    # Tampilkan live odds dalam format table
+    live_odds_list = []
+    for match_name, odds_data in st.session_state.live_market_data.items():
+        live_odds_list.append({
+            "Match": match_name,
+            "Over Odds": odds_data.get("over", "N/A"),
+            "Under Odds": odds_data.get("under", "N/A"),
+            "Line": odds_data.get("line", "N/A"),
+            "Bookmaker": odds_data.get("bm", "N/A")
+        })
+    
+    if live_odds_list:
+        df_odds = pd.DataFrame(live_odds_list)
+        st.dataframe(df_odds, use_container_width=True, hide_index=True)
+        st.caption(f"✅ Total {len(live_odds_list)} matches EPL dengan odds live")
+    else:
+        st.info("Belum ada live odds. Jalankan scan untuk fetch data.")
+else:
+    st.info("📡 Belum ada data live odds. Jalankan scan untuk fetch data dari The Odds API.")
+
+# --- BAGIAN D: SCANNER ---
 st.divider()
 if st.button("🚀 JALANKAN SCAN MYRIARK SEKARANG", type="primary"):
     if not tiket_aktif:
@@ -246,6 +314,9 @@ if st.button("🚀 JALANKAN SCAN MYRIARK SEKARANG", type="primary"):
                                 if o_price and u_price:
                                     live_market[match_name] = {"over": o_price, "under": u_price, "line": line_point, "bm": target_bm["key"]}
 
+                # PATCH 18: Simpan live_market ke session state
+                st.session_state.live_market_data = live_market
+
                 if live_market:
                     st.success(f"✅ Berhasil fetch {len(live_market)} matches EPL dari API")
                 else:
@@ -301,3 +372,7 @@ if st.button("🚀 JALANKAN SCAN MYRIARK SEKARANG", type="primary"):
                             kirim_telegram(pesan_tg)
                         else:
                             st.info(f"Belum siap untuk {t_match}. Butuh modal {min_bet}, hasil akhir masih minus: {total_result}")
+                
+                # PATCH 18: Rerun untuk update live odds display
+                time.sleep(0.5)
+                st.rerun()
