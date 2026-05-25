@@ -129,9 +129,13 @@ except Exception as e:
 if tiket_aktif:
     # PATCH 9: Data structure validation
     df = pd.DataFrame(tiket_aktif)
-    kolom_wajib = ["ticket_id", "match", "entry_side", "entry_line", "entry_odds", "entry_stake"]
-    kolom_tersedia = [k for k in kolom_wajib if k in df.columns]
-    st.dataframe(df[kolom_tersedia], use_container_width=True)
+    # PATCH 10: Cek DataFrame kosong sebelum akses
+    if df.empty:
+        st.info("Tidak ada tiket yang sedang berjalan.")
+    else:
+        kolom_wajib = ["ticket_id", "match", "entry_side", "entry_line", "entry_odds", "entry_stake"]
+        kolom_tersedia = [k for k in kolom_wajib if k in df.columns]
+        st.dataframe(df[kolom_tersedia], use_container_width=True)
 else:
     st.info("Tidak ada tiket yang sedang berjalan.")
 
@@ -142,8 +146,14 @@ if st.button("🚀 JALANKAN SCAN MYRIARK SEKARANG", type="primary"):
         st.warning("Tidak ada tiket RUNNING untuk discan.")
     else:
         with st.spinner("Menarik data dari The Odds API..."):
-            url = "https://api.the-odds-api.com/v4/sports/upcoming/odds"
-            params = {"apiKey": ODDS_API_KEY, "regions": "eu", "markets": "totals", "oddsFormat": "decimal"}
+            url = "https://api.the-odds-api.com/v4/sports/football/upcoming/odds"
+            # PATCH 11: Tambah sports parameter dan specify football
+            params = {
+                "apiKey": ODDS_API_KEY,
+                "regions": "eu",
+                "markets": "totals",
+                "oddsFormat": "decimal"
+            }
             
             try:
                 res = requests.get(url, params=params, timeout=10)
@@ -167,7 +177,7 @@ if st.button("🚀 JALANKAN SCAN MYRIARK SEKARANG", type="primary"):
                     away = match.get("away_team", "")
                     match_name = f"{home} vs {away}"
                     
-                    target_market = None
+                    # PATCH 12: Hapus unused variable target_market
                     # PATCH 8: Fallback bookmaker jika pinnacle tidak ada
                     bms = {bm["key"]: bm for bm in match.get("bookmakers", [])}
                     if "pinnacle" in bms:
@@ -186,7 +196,8 @@ if st.button("🚀 JALANKAN SCAN MYRIARK SEKARANG", type="primary"):
                                 for out in market.get("outcomes", []):
                                     if out["name"].lower() == "over": o_price = decimal_ke_indo(out["price"])
                                     if out["name"].lower() == "under": u_price = decimal_ke_indo(out["price"])
-                                    line_point = out.get("point")
+                                    # PATCH 13: Tambah default value untuk line_point
+                                    line_point = out.get("point", "N/A")
                                 
                                 if o_price and u_price:
                                     live_market[match_name] = {"over": o_price, "under": u_price, "line": line_point, "bm": target_bm["key"]}
@@ -201,11 +212,23 @@ if st.button("🚀 JALANKAN SCAN MYRIARK SEKARANG", type="primary"):
                     live = live_market[t_match]
                     entry_side = tiket["entry_side"]
                     close_side = "under" if entry_side == "over" else "over"
-                    close_odds = live[close_side]
                     
-                    # PATCH 6: Cek Inkonsistensi Line
-                    if float(tiket["entry_line"]) != float(live["line"]):
-                        st.warning(f"⚠️ Hati-hati! Line voor {t_match} bergeser dari {tiket['entry_line']} menjadi {live['line']}")
+                    # PATCH 14: Validasi close_odds sebelum digunakan
+                    close_odds = live.get(close_side)
+                    if close_odds is None:
+                        st.error(f"❌ Odds untuk {close_side} tidak tersedia di {t_match}")
+                        logging.error(f"Missing odds for {close_side} in {t_match}")
+                        continue
+                    
+                    # PATCH 6: Cek Inkonsistensi Line dengan tolerance float
+                    try:
+                        entry_line_float = float(tiket["entry_line"])
+                        live_line_float = float(live["line"]) if live["line"] != "N/A" else None
+                        
+                        if live_line_float and abs(entry_line_float - live_line_float) > 0.01:
+                            st.warning(f"⚠️ Hati-hati! Line {t_match} bergeser dari {tiket['entry_line']} menjadi {live['line']}")
+                    except (ValueError, TypeError) as e:
+                        logging.warning(f"Line comparison error for {t_match}: {e}")
 
                     modal = tiket["entry_stake"]
                     min_bet = hitung_close_stake(modal, close_odds)
