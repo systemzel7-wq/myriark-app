@@ -156,16 +156,56 @@ if st.button("🚀 JALANKAN SCAN MYRIARK SEKARANG", type="primary"):
             }
             
             try:
-                res = requests.get(url, params=params, timeout=10)
-                res.raise_for_status()
-                # PATCH 5: Validasi JSON
-                data_api = res.json() 
+                # PATCH 15: Validasi API Key sebelum request
+                if not ODDS_API_KEY or ODDS_API_KEY.strip() == "":
+                    st.error("❌ API Key tidak ditemukan di Streamlit secrets. Hubungi admin untuk setup ODDS_API_KEY.")
+                    logging.error("ODDS_API_KEY is empty or not configured")
+                    raise Exception("Missing API Key")
+                
+                logging.info(f"Requesting API from: {url}")
+                res = requests.get(url, params=params, timeout=15)
+                
+                # PATCH 15: Log HTTP status code
+                logging.info(f"API Response Status: {res.status_code}")
+                
+                # PATCH 15: Check for HTTP errors dengan detail
+                if res.status_code == 401:
+                    st.error("❌ API Key Invalid atau Expired. Hubungi admin untuk renew.")
+                    logging.error(f"API Auth Error 401: {res.text}")
+                    data_api = None
+                elif res.status_code == 429:
+                    st.error("❌ Rate limit exceeded. Tunggu beberapa menit sebelum scan ulang.")
+                    logging.error(f"API Rate Limit 429")
+                    data_api = None
+                elif res.status_code >= 400:
+                    st.error(f"❌ API Error {res.status_code}: {res.reason}")
+                    logging.error(f"API HTTP Error {res.status_code}: {res.text[:200]}")
+                    data_api = None
+                else:
+                    res.raise_for_status()
+                    # PATCH 5: Validasi JSON
+                    data_api = res.json()
+                    logging.info(f"Successfully fetched {len(data_api) if isinstance(data_api, list) else 'unknown'} matches from API")
+                    
+            except requests.exceptions.Timeout:
+                st.error("⏱️ Timeout - Server API lambat, coba lagi dalam beberapa detik.")
+                logging.error(f"API Timeout Error after 15s")
+                data_api = None
+            except requests.exceptions.ConnectionError:
+                st.error("🌐 Gagal terhubung ke The Odds API. Cek koneksi internet atau API server down.")
+                logging.error(f"API Connection Error: Network unreachable")
+                data_api = None
             except requests.exceptions.RequestException as e:
-                st.error("Gagal terhubung ke server API Bandar.")
+                st.error(f"❌ Gagal terhubung ke server API Bandar: {str(e)[:100]}")
                 logging.error(f"API Fetch Error: {e}")
                 data_api = None
-            except ValueError:
-                st.error("Format data dari API tidak valid (Bukan JSON).")
+            except ValueError as e:
+                st.error("❌ Format data dari API tidak valid (Bukan JSON).")
+                logging.error(f"JSON Parse Error: {e}")
+                data_api = None
+            except Exception as e:
+                st.error(f"❌ Error tidak terduga: {str(e)[:100]}")
+                logging.error(f"Unexpected Error: {e}")
                 data_api = None
 
             if data_api:
@@ -201,6 +241,12 @@ if st.button("🚀 JALANKAN SCAN MYRIARK SEKARANG", type="primary"):
                                 
                                 if o_price and u_price:
                                     live_market[match_name] = {"over": o_price, "under": u_price, "line": line_point, "bm": target_bm["key"]}
+
+                if live_market:
+                    st.success(f"✅ Berhasil fetch {len(live_market)} matches dari API")
+                else:
+                    st.warning("⚠️ API return data tapi tidak ada totals market tersedia. Cek API response structure.")
+                    logging.warning("No live_market entries found after API response")
 
                 # Proses DOS per tiket aktif
                 for tiket in tiket_aktif:
