@@ -145,9 +145,9 @@ if st.button("🚀 JALANKAN SCAN MYRIARK SEKARANG", type="primary"):
     if not tiket_aktif:
         st.warning("Tidak ada tiket RUNNING untuk discan.")
     else:
-        with st.spinner("Menarik data dari The Odds API..."):
-            url = "https://api.the-odds-api.com/v4/sports/football/upcoming/odds"
-            # PATCH 11: Tambah sports parameter dan specify football
+        with st.spinner("Menarik data dari The Odds API (EPL)..."):
+            # PATCH 16: Ganti ke soccer_epl endpoint (Option B)
+            url = "https://api.the-odds-api.com/v4/sports/soccer_epl/odds"
             params = {
                 "apiKey": ODDS_API_KEY,
                 "regions": "eu",
@@ -177,6 +177,10 @@ if st.button("🚀 JALANKAN SCAN MYRIARK SEKARANG", type="primary"):
                     st.error("❌ Rate limit exceeded. Tunggu beberapa menit sebelum scan ulang.")
                     logging.error(f"API Rate Limit 429")
                     data_api = None
+                elif res.status_code == 404:
+                    st.error("❌ Endpoint tidak ditemukan (404). Liga EPL mungkin tidak tersedia saat ini.")
+                    logging.error(f"API Not Found 404: {res.text}")
+                    data_api = None
                 elif res.status_code >= 400:
                     st.error(f"❌ API Error {res.status_code}: {res.reason}")
                     logging.error(f"API HTTP Error {res.status_code}: {res.text[:200]}")
@@ -185,7 +189,7 @@ if st.button("🚀 JALANKAN SCAN MYRIARK SEKARANG", type="primary"):
                     res.raise_for_status()
                     # PATCH 5: Validasi JSON
                     data_api = res.json()
-                    logging.info(f"Successfully fetched {len(data_api) if isinstance(data_api, list) else 'unknown'} matches from API")
+                    logging.info(f"Successfully fetched {len(data_api) if isinstance(data_api, list) else 'unknown'} matches from EPL API")
                     
             except requests.exceptions.Timeout:
                 st.error("⏱️ Timeout - Server API lambat, coba lagi dalam beberapa detik.")
@@ -243,7 +247,7 @@ if st.button("🚀 JALANKAN SCAN MYRIARK SEKARANG", type="primary"):
                                     live_market[match_name] = {"over": o_price, "under": u_price, "line": line_point, "bm": target_bm["key"]}
 
                 if live_market:
-                    st.success(f"✅ Berhasil fetch {len(live_market)} matches dari API")
+                    st.success(f"✅ Berhasil fetch {len(live_market)} matches EPL dari API")
                 else:
                     st.warning("⚠️ API return data tapi tidak ada totals market tersedia. Cek API response structure.")
                     logging.warning("No live_market entries found after API response")
