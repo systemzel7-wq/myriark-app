@@ -1,378 +1,407 @@
+\
 """
-Myriark Sniper Dashboard - PWA Version (BULLETPROOF EDITION)
-Gabungan MOS, TOS, DOS, dan POS dengan Advanced Error Handling
+app.py — Myriark Sniper Dashboard (Modular Version)
+Versi 2.1 — Edisi Proteksi Kuota API (Brankas Waktu & Placebo Refresh)
+Arsitektur oleh Gemini & Claude AI
+
+Alur Orkestrasi:
+1. Layar utama murni membaca database Supabase (Gratis & Aman).
+2. Sakelar Auto-Refresh murni sebagai hiasan/pemicu layar berkedip ulang untuk data lokal.
+3. Tombol SCAN menjadi satu-satunya gerbang eksekusi penarikan odds.
+4. Fungsi penarikan API dibungkus @st.cache_data dengan TTL 3 Menit (Anti-Spam Klik).
 """
 
 import streamlit as st
-import requests
-import uuid
 import time
 import logging
+import uuid
+import pandas as pd
 from datetime import datetime
 from zoneinfo import ZoneInfo
 from supabase import create_client, Client
-import pandas as pd
 
-# ==========================================
-# KONFIGURASI DASAR & LOGGING
-# ==========================================
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+# Import modul internal Myriark
+import tos
+import dos
+import pos
+
+# =========================================================
+# KONFIGURASI & LOGGING
+# =========================================================
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s - %(levelname)s - %(message)s"
+)
 WITA = ZoneInfo("Asia/Makassar")
 
-st.set_page_config(page_title="Myriark Sniper", page_icon="🛡️", layout="wide")
-st.title("🛡️ Myriark Sniper Dashboard")
-st.caption(f"Waktu Sistem: {datetime.now(WITA).strftime('%Y-%m-%d %H:%M:%S')} WITA")
+st.set_page_config(
+    page_title="Myriark Sniper",
+    page_icon="🛡️",
+    layout="wide"
+)
 
-# ==========================================
-# 1. KREDENSIAL & SUPABASE STARTUP (PATCHED)
-# ==========================================
+# =========================================================
+# KONEKSI SUPABASE & SECRETS
+# =========================================================
 try:
-    SUPABASE_URL = st.secrets["SUPABASE_URL"]
-    SUPABASE_KEY = st.secrets["SUPABASE_KEY"]
-    ODDS_API_KEY = st.secrets["ODDS_API_KEY"]
-    TELEGRAM_BOT_TOKEN = st.secrets["TELEGRAM_BOT_TOKEN"]
-    TELEGRAM_CHAT_ID = st.secrets["TELEGRAM_CHAT_ID"]
-    
-    supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
+    SUPABASE_URL      = st.secrets["SUPABASE_URL"]
+    SUPABASE_KEY      = st.secrets["SUPABASE_KEY"]
+    ODDS_API_KEY      = st.secrets["ODDS_API_KEY"]
+    BOT_TOKEN         = st.secrets["TELEGRAM_BOT_TOKEN"]
+    CHAT_ID           = st.secrets["TELEGRAM_CHAT_ID"]
+
+    supabase: Client  = create_client(SUPABASE_URL, SUPABASE_KEY)
+    logging.info("Supabase connected successfully.")
+
 except Exception as e:
-    st.error("🔴 Kritis: Gagal memuat kredensial atau koneksi ke Supabase.")
-    logging.error(f"Supabase Init Error: {e}")
-    st.stop() # Hentikan eksekusi jika DB mati
+    st.error("🔴 Gagal terkoneksi ke Supabase atau berkas Secrets (.streamlit/secrets.toml) tidak lengkap.")
+    logging.error(f"Startup Error: {e}")
+    st.stop()
 
-# ==========================================
-# 2. FUNGSI MATEMATIKA DOS (PATCHED)
-# ==========================================
-def hitung_profit(odds, stake):
-    if odds is None or stake is None or stake <= 0: return 0
-    if odds < 0:
-        return round(stake / abs(odds))
-    else:
-        return round(stake * odds)
 
-def hitung_close_stake(modal, close_odds):
-    if close_odds is None or close_odds == 0: return None
-    if close_odds < 0:
-        return round(modal * abs(close_odds))
-    else:
-        return round(modal / close_odds)
+# =========================================================
+# FUNGSI BRANKAS API (CACHE PROTECTION LAYER)
+# =========================================================
+@st.cache_data(ttl=180, show_spinner=False)
+def tarik_odds_lewat_brankas(api_key):
+    """
+    Membungkus fungsi tos.jalankan() ke dalam memori jangka pendek Streamlit.
+    Jika tombol Scan ditekan berulang kali dalam kurun waktu < 3 menit (180 detik),
+    fungsi ini akan langsung memulangkan data hasil tarikan terakhir dari brankas lokal,
+    TANPA menembak server The Odds API lagi. Kuota Bos 100% aman dari bocor.
+    """
+    logging.info("Brankas Kosong/Expired! Menembak The Odds API secara live...")
+    return tos.jalankan(api_key)
 
-def decimal_ke_indo(decimal_odds):
-    # PATCH 1: Boundary check mencegah Division by Zero
-    if decimal_odds is None or decimal_odds <= 1.01: return None 
-    if decimal_odds >= 2.0:
-        return round(decimal_odds - 1, 2)
-    else:
-        return round(-1 / (decimal_odds - 1), 2)
 
-# ==========================================
-# 3. FUNGSI NOTIFIKASI POS (PATCHED)
-# ==========================================
-def kirim_telegram(pesan):
-    url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
-    payload = {"chat_id": TELEGRAM_CHAT_ID, "text": pesan, "parse_mode": "Markdown"}
+# =========================================================
+# HELPER DATABASE SUPABASE (100% GRATIS REQUEST)
+# =========================================================
+def ambil_tiket_running():
     try:
-        res = requests.post(url, json=payload, timeout=5)
-        res.raise_for_status()
+        res = supabase.table("tickets").select("*").eq("status", "RUNNING").execute()
+        return res.data or []
     except Exception as e:
-        # PATCH 7: Log ke console, tidak perlu merusak UI dengan st.error
-        logging.error(f"Telegram failed: {e}")
+        logging.error(f"Fetch tickets error: {e}")
+        return []
 
-# ==========================================
-# PATCH 17: FUNGSI DELETE TIKET
-# ==========================================
-def hapus_tiket(ticket_id):
-    """Hapus tiket dari database"""
+
+def ambil_history_semua():
+    """
+    Ambil semua history snapshot dari Supabase.
+    Return dict {ticket_id: [list snapshot]}
+    """
+    try:
+        res = supabase.table("snapshots").select("*").execute()
+        data = res.data or []
+
+        history_map = {}
+        for row in data:
+            tid = row.get("ticket_id")
+            if tid not in history_map:
+                history_map[tid] = []
+            history_map[tid].append(row)
+
+        return history_map
+    except Exception as e:
+        logging.error(f"Fetch history error: {e}")
+        return {}
+
+
+def simpan_snapshot(snapshot: dict):
+    try:
+        supabase.table("snapshots").insert(snapshot).execute()
+    except Exception as e:
+        logging.error(f"Save snapshot error: {e}")
+
+
+def hapus_tiket(ticket_id: str):
     try:
         supabase.table("tickets").delete().eq("ticket_id", ticket_id).execute()
-        st.success(f"✅ Tiket {ticket_id} berhasil dihapus!")
-        logging.info(f"Ticket deleted: {ticket_id}")
-        time.sleep(0.5)
-        st.rerun()
+        logging.info(f"Tiket dihapus: {ticket_id}")
+        return True
     except Exception as e:
-        st.error(f"❌ Gagal menghapus tiket: {str(e)[:100]}")
-        logging.error(f"Delete Ticket Error: {e}")
+        logging.error(f"Delete ticket error: {e}")
+        return False
 
-# ==========================================
-# 4. TAMPILAN ANTARMUKA (UI)
-# ==========================================
 
-# --- BAGIAN A: INPUT TIKET ---
+def settle_tiket(ticket_id: str):
+    try:
+        supabase.table("tickets").update(
+            {"status": "SETTLED"}
+        ).eq("ticket_id", ticket_id).execute()
+        logging.info(f"Tiket settled: {ticket_id}")
+        return True
+    except Exception as e:
+        logging.error(f"Settle ticket error: {e}")
+        return False
+
+
+# =========================================================
+# UI — HEADER UTAMA
+# =========================================================
+st.title("🛡️ Myriark Sniper Dashboard")
+st.caption(
+    f"Waktu Sistem Dashboard: {datetime.now(WITA).strftime('%Y-%m-%d %H:%M:%S')} WITA  |  "
+    f"v2.1 — Anti-Kuota Bocor Edition"
+)
+
+# =========================================================
+# UI — INPUT TIKET BARU
+# =========================================================
 with st.expander("➕ INPUT TIKET BARU", expanded=False):
     with st.form("form_tiket", clear_on_submit=True):
         col1, col2 = st.columns(2)
         with col1:
-            match_name = st.text_input("Nama Match (Harus persis dengan API, cth: Lazio vs Pisa)")
-            side = st.selectbox("Posisi (Side)", ["over", "under"])
-            line = st.number_input("Line (cth: 2.5)", value=2.5, step=0.25)
+            match_name = st.text_input(
+                "Nama Match (Pertandingan)",
+                placeholder="Contoh: Lazio vs Pisa (Nama wajib 100% persis rilis API)"
+            )
+            side = st.selectbox("Posisi Taruhan (Side)", ["over", "under"])
+            line = st.number_input("Garis Batas (Line)", value=2.5, step=0.25, min_value=0.25)
+
         with col2:
-            odds = st.number_input("Odds Indo (Kei pakai minus, cth: -1.15)", value=-1.0)
-            stake = st.number_input("Modal / Stake (Rp)", value=100000, step=10000)
-        
-        submit = st.form_submit_button("💾 Simpan Tiket")
-        if submit and match_name:
-            # PATCH 3: ID Unik menghindari duplikasi
-            unique_id = f"TKT-{datetime.now().strftime('%H%M%S')}-{uuid.uuid4().hex[:4].upper()}"
-            data_tiket = {
-                "ticket_id": unique_id,
-                "match": match_name,
-                "status": "RUNNING",
-                "entry_side": side,
-                "entry_line": line,
-                "entry_odds": odds,
-                "entry_stake": stake
-            }
-            try:
-                supabase.table("tickets").insert(data_tiket).execute()
-                st.success(f"Tiket {match_name} berhasil disimpan!")
-                # PATCH 4: Mencegah Race Condition sebelum rerun
-                time.sleep(0.5) 
-                st.rerun()
-            except Exception as e:
-                st.error("Gagal menyimpan tiket ke database.")
-                logging.error(f"Insert Ticket Error: {e}")
+            odds = st.number_input(
+                "Odds Indo / Kei (Pakai tanda minus jika negatif)",
+                value=-1.10,
+                step=0.01,
+                format="%.2f"
+            )
+            stake = st.number_input(
+                "Modal / Nilai Taruhan (Rp)",
+                value=100000,
+                step=10000,
+                min_value=1000
+            )
 
-# --- BAGIAN B: DAFTAR TIKET AKTIF ---
+        submit = st.form_submit_button("💾 Simpan Tiket Baru", type="primary")
+
+        if submit:
+            if not match_name.strip():
+                st.error("❌ Nama pertandingan tidak boleh kosong.")
+            elif odds == 0:
+                st.error("❌ Nilai Odds/Kei tidak valid (tidak boleh 0).")
+            else:
+                ticket_id = f"TKT-{datetime.now(WITA).strftime('%H%M%S')}-{uuid.uuid4().hex[:4].upper()}"
+                data_tiket = {
+                    "ticket_id"  : ticket_id,
+                    "match"      : match_name.strip(),
+                    "status"     : "RUNNING",
+                    "entry_side" : side,
+                    "entry_line" : line,
+                    "entry_odds" : odds,
+                    "entry_stake": stake
+                }
+                try:
+                    supabase.table("tickets").insert(data_tiket).execute()
+                    st.success(f"✅ Tiket {ticket_id} berhasil masuk ke antrean radar!")
+                    logging.info(f"Tiket disimpan ke DB: {ticket_id} | {match_name}")
+                    time.sleep(0.5)
+                    st.rerun()
+                except Exception as e:
+                    st.error("❌ Gagal menyimpan tiket ke database Supabase.")
+                    logging.error(f"Insert database error: {e}")
+
+
+# =========================================================
+# UI — DAFTAR TIKET YANG SEDANG RUNNING
+# =========================================================
 st.subheader("📋 Tiket Berjalan (RUNNING)")
-try:
-    response = supabase.table("tickets").select("*").eq("status", "RUNNING").execute()
-    tiket_aktif = response.data
-except Exception as e:
-    st.error("Gagal mengambil data dari Supabase.")
-    logging.error(f"Fetch Tickets Error: {e}")
-    tiket_aktif = []
+tiket_aktif = ambil_tiket_running()
 
-if tiket_aktif:
-    # PATCH 9: Data structure validation
-    df = pd.DataFrame(tiket_aktif)
-    # PATCH 10: Cek DataFrame kosong sebelum akses
-    if df.empty:
-        st.info("Tidak ada tiket yang sedang berjalan.")
-    else:
-        kolom_wajib = ["ticket_id", "match", "entry_side", "entry_line", "entry_odds", "entry_stake"]
-        kolom_tersedia = [k for k in kolom_wajib if k in df.columns]
-        
-        # PATCH 17: Tambah kolom aksi (delete button)
-        st.write("Klik 🗑️ untuk menghapus tiket:")
-        for idx, tiket in enumerate(tiket_aktif):
-            col1, col2, col3, col4, col5, col6, col7 = st.columns([1.5, 1.5, 1.2, 1.2, 1.2, 1.5, 0.8])
-            with col1:
-                st.write(tiket.get("ticket_id", "N/A"))
-            with col2:
-                st.write(tiket.get("match", "N/A"))
-            with col3:
-                st.write(tiket.get("entry_side", "N/A").upper())
-            with col4:
-                st.write(f"{tiket.get('entry_line', 'N/A')}")
-            with col5:
-                st.write(f"{tiket.get('entry_odds', 'N/A')}")
-            with col6:
-                st.write(f"Rp {tiket.get('entry_stake', 0):,.0f}")
+if not tiket_aktif:
+    st.info("Tidak ada tiket yang sedang berjalan di dalam radar saat ini.")
+else:
+    for tiket in tiket_aktif:
+        with st.container():
+            col1, col2, col3, col4, col5, col6, col7, col8 = st.columns(
+                [1.5, 2.0, 1.0, 1.0, 1.0, 1.5, 0.7, 0.7]
+            )
+            tid = tiket.get("ticket_id", "?")
+            with col1: st.write(f"`{tid}`")
+            with col2: st.write(tiket.get("match", "?"))
+            with col3: st.write(tiket.get("entry_side", "?").upper())
+            with col4: st.write(tiket.get("entry_line", "?"))
+            with col5: st.write(tiket.get("entry_odds", "?"))
+            with col6: st.write(f"Rp {tiket.get('entry_stake', 0):,.0f}")
+
             with col7:
-                if st.button("🗑️", key=f"delete_{tiket.get('ticket_id')}", help="Hapus tiket ini"):
-                    # PATCH 17: Konfirmasi sebelum delete
-                    if st.session_state.get(f"confirm_delete_{tiket.get('ticket_id')}", False):
-                        hapus_tiket(tiket.get("ticket_id"))
+                if st.button("✅", key=f"settle_{tid}", help="Tandai tiket Settle/Selesai"):
+                    if settle_tiket(tid):
+                        st.success(f"Settled!")
+                        time.sleep(0.5)
+                        st.rerun()
+
+            with col8:
+                if st.button("🗑️", key=f"del_{tid}", help="Hapus tiket dari radar"):
+                    if st.session_state.get(f"confirm_{tid}", False):
+                        if hapus_tiket(tid):
+                            st.success("Dihapus!")
+                            time.sleep(0.5)
+                            st.rerun()
                     else:
-                        st.session_state[f"confirm_delete_{tiket.get('ticket_id')}"] = True
-                        st.warning(f"Yakin ingin hapus tiket {tiket.get('ticket_id')}? Klik 🗑️ lagi untuk confirm.")
-else:
-    st.info("Tidak ada tiket yang sedang berjalan.")
+                        st.session_state[f"confirm_{tid}"] = True
+                        st.warning("Konfirmasi hapus? Klik ikon sampah sekali lagi.")
 
-# --- BAGIAN C: LIVE ODDS DISPLAY (PATCH 18) ---
+
+# =========================================================
+# UI — CONTROL PANEL SCANNER (ANTI-BOCOOR ENGINE)
+# =========================================================
 st.divider()
-st.subheader("📊 Live Odds Tersedia (EPL)")
+col_scan, col_auto = st.columns([2, 1])
 
-# PATCH 18: Session state untuk simpan live_market setiap scan
-if "live_market_data" not in st.session_state:
-    st.session_state.live_market_data = {}
+with col_scan:
+    scan_button = st.button(
+        "🚀 JALANKAN SCAN MYRIARK SEKARANG",
+        type="primary",
+        use_container_width=True
+    )
 
-if st.session_state.live_market_data:
-    # Tampilkan live odds dalam format table
-    live_odds_list = []
-    for match_name, odds_data in st.session_state.live_market_data.items():
-        live_odds_list.append({
-            "Match": match_name,
-            "Over Odds": odds_data.get("over", "N/A"),
-            "Under Odds": odds_data.get("under", "N/A"),
-            "Line": odds_data.get("line", "N/A"),
-            "Bookmaker": odds_data.get("bm", "N/A")
-        })
-    
-    if live_odds_list:
-        df_odds = pd.DataFrame(live_odds_list)
-        st.dataframe(df_odds, use_container_width=True, hide_index=True)
-        st.caption(f"✅ Total {len(live_odds_list)} matches EPL dengan odds live")
-    else:
-        st.info("Belum ada live odds. Jalankan scan untuk fetch data.")
-else:
-    st.info("📡 Belum ada data live odds. Jalankan scan untuk fetch data dari The Odds API.")
+with col_auto:
+    # SAKELAR REFRESH HIASAN UI (Placebo / Dummy Filter)
+    # Berfungsi me-refresh UI dan Supabase lokal saja, sama sekali tidak memanggil API luar.
+    auto_refresh_placebo = st.checkbox("🔄 Auto-Refresh Layar (30 detik)")
 
-# --- BAGIAN D: SCANNER ---
-st.divider()
-if st.button("🚀 JALANKAN SCAN MYRIARK SEKARANG", type="primary"):
+if auto_refresh_placebo:
+    time.sleep(30)
+    st.rerun()
+
+# =========================================================
+# PIPELINE EKSEKUSI UTAMA (HANYA AKTIF JIKA TOMBOL DIKLIK)
+# =========================================================
+if scan_button:
     if not tiket_aktif:
-        st.warning("Tidak ada tiket RUNNING untuk discan.")
+        st.warning("⚠️ Scanner dibatalkan: Tidak ada tiket bertanda RUNNING di database.")
     else:
-        with st.spinner("Menarik data dari The Odds API (EPL)..."):
-            # PATCH 16: Ganti ke soccer_epl endpoint (Option B)
-            url = "https://api.the-odds-api.com/v4/sports/soccer_epl/odds"
-            params = {
-                "apiKey": ODDS_API_KEY,
-                "regions": "eu",
-                "markets": "totals",
-                "oddsFormat": "decimal"
-            }
-            
-            try:
-                # PATCH 15: Validasi API Key sebelum request
-                if not ODDS_API_KEY or ODDS_API_KEY.strip() == "":
-                    st.error("❌ API Key tidak ditemukan di Streamlit secrets. Hubungi admin untuk setup ODDS_API_KEY.")
-                    logging.error("ODDS_API_KEY is empty or not configured")
-                    raise Exception("Missing API Key")
-                
-                logging.info(f"Requesting API from: {url}")
-                res = requests.get(url, params=params, timeout=15)
-                
-                # PATCH 15: Log HTTP status code
-                logging.info(f"API Response Status: {res.status_code}")
-                
-                # PATCH 15: Check for HTTP errors dengan detail
-                if res.status_code == 401:
-                    st.error("❌ API Key Invalid atau Expired. Hubungi admin untuk renew.")
-                    logging.error(f"API Auth Error 401: {res.text}")
-                    data_api = None
-                elif res.status_code == 429:
-                    st.error("❌ Rate limit exceeded. Tunggu beberapa menit sebelum scan ulang.")
-                    logging.error(f"API Rate Limit 429")
-                    data_api = None
-                elif res.status_code == 404:
-                    st.error("❌ Endpoint tidak ditemukan (404). Liga EPL mungkin tidak tersedia saat ini.")
-                    logging.error(f"API Not Found 404: {res.text}")
-                    data_api = None
-                elif res.status_code >= 400:
-                    st.error(f"❌ API Error {res.status_code}: {res.reason}")
-                    logging.error(f"API HTTP Error {res.status_code}: {res.text[:200]}")
-                    data_api = None
-                else:
-                    res.raise_for_status()
-                    # PATCH 5: Validasi JSON
-                    data_api = res.json()
-                    logging.info(f"Successfully fetched {len(data_api) if isinstance(data_api, list) else 'unknown'} matches from EPL API")
-                    
-            except requests.exceptions.Timeout:
-                st.error("⏱️ Timeout - Server API lambat, coba lagi dalam beberapa detik.")
-                logging.error(f"API Timeout Error after 15s")
-                data_api = None
-            except requests.exceptions.ConnectionError:
-                st.error("🌐 Gagal terhubung ke The Odds API. Cek koneksi internet atau API server down.")
-                logging.error(f"API Connection Error: Network unreachable")
-                data_api = None
-            except requests.exceptions.RequestException as e:
-                st.error(f"❌ Gagal terhubung ke server API Bandar: {str(e)[:100]}")
-                logging.error(f"API Fetch Error: {e}")
-                data_api = None
-            except ValueError as e:
-                st.error("❌ Format data dari API tidak valid (Bukan JSON).")
-                logging.error(f"JSON Parse Error: {e}")
-                data_api = None
-            except Exception as e:
-                st.error(f"❌ Error tidak terduga: {str(e)[:100]}")
-                logging.error(f"Unexpected Error: {e}")
-                data_api = None
+        with st.spinner("Membidik target pasar... (Mengambil dari Brankas jika klik < 3 menit)"):
 
-            if data_api:
-                live_market = {}
-                
-                # Transformasi Data
-                for match in data_api:
-                    home = match.get("home_team", "")
-                    away = match.get("away_team", "")
-                    match_name = f"{home} vs {away}"
-                    
-                    # PATCH 12: Hapus unused variable target_market
-                    # PATCH 8: Fallback bookmaker jika pinnacle tidak ada
-                    bms = {bm["key"]: bm for bm in match.get("bookmakers", [])}
-                    if "pinnacle" in bms:
-                        target_bm = bms["pinnacle"]
-                    elif "onexbet" in bms:
-                        target_bm = bms["onexbet"]
-                    elif "williamhill" in bms:
-                        target_bm = bms["williamhill"]
+            # STEP 1 — Ambil Data Melalui Lapisan Brankas (Proteksi Kuota Mutlak)
+            hasil_tos = tarik_odds_lewat_brankas(ODDS_API_KEY)
+
+            if hasil_tos["status"] != "OK":
+                st.error(f"❌ Kegagalan Mesin Penarik (TOS): {hasil_tos.get('pesan', 'Unknown')}")
+                logging.error(f"TOS Critical Error: {hasil_tos}")
+            else:
+                live_data = hasil_tos["live_data"]
+
+                # Menampilkan Laporan Sisa Amunisi/Kuota API ke Tampilan
+                quota = hasil_tos.get("quota", {})
+                st.caption(
+                    f"📊 Status Amunisi Kuota — Sisa Jatah (Remaining): {quota.get('remaining','?')} | "
+                    f"Terpakai (Used): {quota.get('used','?')} | "
+                    f"Biaya Tarikan Terakhir (Cost): {quota.get('cost','?')} | "
+                    f"Pertandingan Aktif Terfilter: {hasil_tos['total_aktif']}"
+                )
+
+                # STEP 2 — Tarik Riwayat Lama dari Database Supabase (100% Gratis)
+                history_map = ambil_history_semua()
+
+                # STEP 3 — Hitung Kalkulasi Hedging & Analisis Tren (DOS Engine)
+                hasil_dos = dos.jalankan(live_data, tiket_aktif, history_map)
+
+                # Simpan Snapshot Perubahan ke Database (Kecuali Pertandingan Hilang/No Live)
+                for snapshot in hasil_dos:
+                    if snapshot.get("status") not in ["NO_LIVE", "NO_ODDS"]:
+                        simpan_snapshot(snapshot)
+
+                # STEP 4 — Kirim Notifikasi via Telegram (POS Engine)
+                log_pos = pos.jalankan(hasil_dos, BOT_TOKEN, CHAT_ID)
+
+                # =========================================================
+                # UI — TAMPILKAN HASIL BIDIKAN SCANNER
+                # =========================================================
+                st.subheader("📊 Laporan Bidikan Harga Pasar")
+
+                ikon_status = {
+                    "PROFIT_READY": "🟢",
+                    "BEP_READY"   : "🟡",
+                    "BETTER"      : "📈",
+                    "WORSE"       : "⚠️",
+                    "FLAT"        : "➡️",
+                    "NOT_READY"   : "🔴",
+                    "NO_LIVE"     : "❓",
+                    "NO_ODDS"     : "❓",
+                }
+
+                for hasil in hasil_dos:
+                    status      = hasil.get("status", "?")
+                    ikon        = ikon_status.get(status, "❓")
+                    match       = hasil.get("match", "?")
+                    tid         = hasil.get("ticket_id", "?")
+                    tren        = hasil.get("tren", "?")
+                    close_stake = hasil.get("close_stake")
+                    total       = hasil.get("total_result", 0)
+
+                    if status in ["NO_LIVE", "NO_ODDS"]:
+                        st.warning(f"{ikon} `{tid}` — {hasil.get('pesan', status)}")
+                        continue
+
+                    if status == "PROFIT_READY":
+                        st.success(
+                            f"{ikon} **{status}** | `{tid}` | {match}
+
+"
+                            f"Lawan Arah: {hasil.get('close_side','?').upper()} "
+                            f"Odds Bandar: {hasil.get('close_odds','?')} | "
+                            f"Rekomendasi Min Bet: Rp {close_stake:,.0f} | "
+                            f"Proyeksi Bersih: Rp {total:,.0f} | "
+                            f"Arah Pergerakan Tren: {tren}"
+                        )
+                    elif status == "BEP_READY":
+                        st.warning(
+                            f"{ikon} **{status}** | `{tid}` | {match}
+
+"
+                            f"Lawan Arah: {hasil.get('close_side','?').upper()} "
+                            f"Odds Bandar: {hasil.get('close_odds','?')} | "
+                            f"Rekomendasi Min Bet: Rp {close_stake:,.0f} | "
+                            f"Proyeksi Hasil: Rp {total:,.0f} (Balik Modal) | "
+                            f"Arah Pergerakan Tren: {tren}"
+                        )
+                    elif status == "WORSE":
+                        st.error(
+                            f"{ikon} **{status}** | `{tid}` | {match}
+
+"
+                            f"Odds Lawan: {hasil.get('close_odds','?')} | "
+                            f"Biaya Min Bet Membengkak: Rp {close_stake:,.0f} | "
+                            f"Arah Pergerakan Tren: {tren}"
+                        )
                     else:
-                        target_bm = bms[list(bms.keys())[0]] if bms else None
+                        st.info(
+                            f"{ikon} **{status}** | `{tid}` | {match} | "
+                            f"Tren Pergerakan: {tren}"
+                        )
 
-                    if target_bm:
-                        for market in target_bm.get("markets", []):
-                            if market.get("key") == "totals":
-                                o_price, u_price, line_point = None, None, None
-                                for out in market.get("outcomes", []):
-                                    if out["name"].lower() == "over": o_price = decimal_ke_indo(out["price"])
-                                    if out["name"].lower() == "under": u_price = decimal_ke_indo(out["price"])
-                                    # PATCH 13: Tambah default value untuk line_point
-                                    line_point = out.get("point", "N/A")
-                                
-                                if o_price and u_price:
-                                    live_market[match_name] = {"over": o_price, "under": u_price, "line": line_point, "bm": target_bm["key"]}
+                # Laporan Pengiriman Pesan Telegram
+                if log_pos:
+                    terkirim = sum(1 for l in log_pos if l["terkirim"])
+                    st.caption(f"📨 Jalur Log Komunikasi: {terkirim}/{len(log_pos)} pesan terkirim ke Telegram.")
 
-                # PATCH 18: Simpan live_market ke session state
-                st.session_state.live_market_data = live_market
+                # Menyimpan data pasar terakhir ke session state untuk tampilan bawah Expand
+                if live_data:
+                    st.session_state.live_market_data = live_data
 
-                if live_market:
-                    st.success(f"✅ Berhasil fetch {len(live_market)} matches EPL dari API")
-                else:
-                    st.warning("⚠️ API return data tapi tidak ada totals market tersedia. Cek API response structure.")
-                    logging.warning("No live_market entries found after API response")
+        time.sleep(0.3)
 
-                # Proses DOS per tiket aktif
-                for tiket in tiket_aktif:
-                    t_match = tiket["match"]
-                    if t_match not in live_market:
-                        st.warning(f"Live odds belum tersedia untuk: {t_match}")
-                        continue
-                    
-                    live = live_market[t_match]
-                    entry_side = tiket["entry_side"]
-                    close_side = "under" if entry_side == "over" else "over"
-                    
-                    # PATCH 14: Validasi close_odds sebelum digunakan
-                    close_odds = live.get(close_side)
-                    if close_odds is None:
-                        st.error(f"❌ Odds untuk {close_side} tidak tersedia di {t_match}")
-                        logging.error(f"Missing odds for {close_side} in {t_match}")
-                        continue
-                    
-                    # PATCH 6: Cek Inkonsistensi Line dengan tolerance float
-                    try:
-                        entry_line_float = float(tiket["entry_line"])
-                        live_line_float = float(live["line"]) if live["line"] != "N/A" else None
-                        
-                        if live_line_float and abs(entry_line_float - live_line_float) > 0.01:
-                            st.warning(f"⚠️ Hati-hati! Line {t_match} bergeser dari {tiket['entry_line']} menjadi {live['line']}")
-                    except (ValueError, TypeError) as e:
-                        logging.warning(f"Line comparison error for {t_match}: {e}")
+# =========================================================
+# UI — MONITORING DATA PASAR LENGKAP (EXPANDER)
+# =========================================================
+if st.session_state.get("live_market_data"):
+    st.divider()
+    with st.expander(
+        f"📡 Intisari Data Pasar Terakhir ({len(st.session_state.live_market_data)} Pertandingan)",
+        expanded=False
+    ):
+        odds_list = []
+        for match_name, odds_data in st.session_state.live_market_data.items():
+            odds_list.append({
+                "Pertandingan": match_name,
+                "Harga Over"   : odds_data.get("over", "N/A"),
+                "Harga Under"  : odds_data.get("under", "N/A"),
+                "Garis Pasaran": odds_data.get("line", "N/A"),
+                "Nama Bandar"  : odds_data.get("bookmaker", "N/A")
+            })
 
-                    modal = tiket["entry_stake"]
-                    min_bet = hitung_close_stake(modal, close_odds)
-                    
-                    if min_bet:
-                        close_profit = hitung_profit(close_odds, min_bet)
-                        total_result = close_profit - modal
-                        
-                        if total_result >= -1: 
-                            status_alert = "PROFIT_READY 🟢" if total_result > 1 else "BEP_READY 🟡"
-                            st.success(f"**{status_alert} pada {t_match}!** Pasang {close_side.upper()} modal {min_bet} di odds {close_odds} (Sumber: {live['bm']}).")
-                            
-                            pesan_tg = f"🚨 *MYRIARK SIGNAL: {status_alert}* 🚨\n\n" \
-                                       f"⚽ *{t_match}*\n" \
-                                       f"▪️ *Tutup Posisi:* {close_side.upper()}\n" \
-                                       f"▪️ *Line Target:* {live['line']} \n" \
-                                       f"▪️ *Odds (Indo):* {close_odds} ({live['bm']})\n" \
-                                       f"💰 *MIN BET:* Rp {min_bet:,.0f}\n\n" \
-                                       f"Estimasi Hasil: Rp {total_result:,.0f}"
-                            kirim_telegram(pesan_tg)
-                        else:
-                            st.info(f"Belum siap untuk {t_match}. Butuh modal {min_bet}, hasil akhir masih minus: {total_result}")
-                
-                # PATCH 18: Rerun untuk update live odds display
-                time.sleep(0.5)
-                st.rerun()
+        df = pd.DataFrame(odds_list)
+        st.dataframe(df, use_container_width=True, hide_index=True)
