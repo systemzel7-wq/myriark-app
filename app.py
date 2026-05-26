@@ -264,6 +264,57 @@ with col_auto:
 if auto_refresh_placebo:
     st.caption("⏳ Mode aktif. (Silakan tarik layar ke bawah untuk refresh manual agar server aman)")
 
+
+# ============================================
+# Setup logging yang terlihat di Streamlit
+# ============================================
+logging.basicConfig(
+    level=logging.DEBUG,
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+)
+
+st.set_page_config(page_title="Myriark App", layout="wide")
+
+# ============================================
+# DEBUG SECTION
+# ============================================
+if st.checkbox("🔍 Debug Mode - Lihat semua log"):
+    st.warning("Debug mode ON - Ini akan menampilkan detail teknis")
+    
+    # Placeholder untuk menampilkan log
+    log_container = st.container()
+    
+    # Jalankan tos.py dengan capture output
+    with log_container:
+        st.write("**Menjalankan tos.py...**")
+        
+        # Panggil tos
+        API_KEY = st.secrets.get("ODDS_API_KEY", "ISI_API_KEY_DISINI")
+        hasil = tos.jalankan(API_KEY)
+        
+        # Tampilkan hasil detail
+        st.json(hasil)
+        
+        # Breakdown setiap tahap
+        st.write("---")
+        st.subheader("📊 Breakdown:")
+        col1, col2, col3, col4 = st.columns(4)
+        
+        with col1:
+            st.metric("Total Bola", hasil.get("total_bola", 0))
+        with col2:
+            st.metric("Match Aktif", hasil.get("total_aktif", 0))
+        with col3:
+            st.metric("Match O/U", hasil.get("total_match", 0))
+        with col4:
+            st.metric("Teams Baru", hasil.get("teams_baru", 0))
+        
+        st.write("---")
+        st.subheader("📋 Data Live:")
+        if hasil.get("live_data"):
+            st.dataframe(hasil["live_data"])
+        else:
+            st.error("❌ Tidak ada data live!")
 # =========================================================
 # PIPELINE EKSEKUSI UTAMA (HANYA AKTIF JIKA TOMBOL DIKLIK)
 # =========================================================
