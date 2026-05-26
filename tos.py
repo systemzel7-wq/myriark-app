@@ -1,6 +1,6 @@
 """
 tos.py — Tarik Odds Service (Modular Version)
-Versi 3.0 by Kimi AI
+Versi 1.1 copilot
 
 Tugas:
 1. Tarik data dari The Odds API (sport=upcoming, 1 quota)
@@ -22,7 +22,7 @@ from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
 
 logging.basicConfig(
-    level=logging.DEBUG,  # UBAH dari INFO ke DEBUG jika perlu
+    level=logging.INFO,
     format="%(asctime)s - %(levelname)s - %(message)s"
 )
 
@@ -31,7 +31,7 @@ logging.basicConfig(
 # =========================================================
 WITA        = ZoneInfo("Asia/Makassar")
 UTC         = timezone.utc
-REGIONS     = "us,au"
+REGIONS     = "us,au,uk,eu"
 MARKETS     = "totals"
 ODDS_FORMAT = "decimal"
 TEAMS_DB    = "teams_db.json"
@@ -86,19 +86,26 @@ def filter_soccer(data_mentah):
     Sampah tidak pernah masuk storage.
     Return list data bola saja.
     """
-    data_bola = []
-    total_masuk = len(data_mentah)
+    total_masuk  = len(data_mentah)
+    data_bola    = []
     
     # DEBUG: Lihat sport_key apa yang dikirim API
     sport_keys_ditemukan = set()
     
     for match in data_mentah:
         sport_key = match.get("sport_key", "")
+        sport_title = match.get("sport_title", "")
         sport_keys_ditemukan.add(sport_key)
         
-        # FILTER: Terima jika sport_key ada "soccer" atau "football"
-        if "soccer" in sport_key.lower() or "football" in sport_key.lower():
+        # FILTER: Terima jika sport_key atau sport_title ada "soccer" atau "football"
+        if ("soccer" in sport_key.lower() or 
+            "football" in sport_key.lower() or
+            "soccer" in sport_title.lower() or
+            "football" in sport_title.lower()):
             data_bola.append(match)
+            logging.debug(f"[tos] ✓ TERIMA: {sport_key} | {sport_title} | {match.get('home_team')} vs {match.get('away_team')}")
+        else:
+            logging.debug(f"[tos] ✗ TOLAK: {sport_key} | {sport_title}")
     
     total_bola   = len(data_bola)
     total_sampah = total_masuk - total_bola
@@ -110,7 +117,7 @@ def filter_soccer(data_mentah):
     
     # DEBUG: Tampilkan semua sport_key yang diterima dari API
     if sport_keys_ditemukan:
-        logging.debug(f"[tos] Sport keys ditemukan dari API: {sport_keys_ditemukan}")
+        logging.info(f"[tos] 🔍 SEMUA SPORT_KEY DARI API: {sport_keys_ditemukan}")
     
     return data_bola
 
@@ -183,30 +190,34 @@ def filter_waktu(data_bola):
     Return list pertandingan aktif.
     """
     now_wita = datetime.now(WITA)
-    hasil = []
-    
+    hasil    = []
+
     for match in data_bola:
         waktu_str = match.get("commence_time")
         if not waktu_str:
             logging.warning(f"[DEBUG] Match tanpa commence_time: {match.get('home_team')} vs {match.get('away_team')}")
             continue
         try:
-            kickoff_utc = datetime.fromisoformat(waktu_str.replace("Z", "+00:00"))
+            kickoff_utc = datetime.fromisoformat(
+                waktu_str.replace("Z", "+00:00")
+            )
             kickoff_wita = kickoff_utc.astimezone(WITA)
         except (ValueError, TypeError) as e:
             logging.warning(f"[DEBUG] Parse waktu gagal: {waktu_str} - Error: {e}")
             continue
-        
+
         selisih_menit = (kickoff_wita - now_wita).total_seconds() / 60
-        
+
         # TAMPILKAN SETIAP MATCH & SELISIH WAKTUNYA
         logging.debug(f"[DEBUG] {match.get('home_team')} vs {match.get('away_team')} | Selisih: {selisih_menit:.0f} menit | Range OK: {-180 <= selisih_menit <= 1440}")
 
         # Masuk kalau LIVE max 3 jam lalu (-180) atau pre-match <= 1440 menit (24 jam)
         if -180 <= selisih_menit <= 1440:
             hasil.append(match)
-            
-    logging.info(f"[tos] Filter waktu: {len(data_bola)} -> {len(hasil)} aktif.")
+    
+    logging.info(
+        f"[tos] Filter waktu: {len(data_bola)} -> {len(hasil)} aktif."
+    )
     return hasil
 
 
@@ -290,30 +301,31 @@ def transformasi_ke_dos_format(data_aktif):
     Return dict.
     """
     hasil = {}
+
     for match in data_aktif:
         home = match.get("home_team", "").strip()
         away = match.get("away_team", "").strip()
-        
+
         if not home or not away:
             continue
-        
+
         match_name = normalize_match_name(f"{home} vs {away}")
         ou_data    = ekstrak_ou_odds(match)
-        
+
         if ou_data is None:
             # TAMPILKAN DETAIL MENGAPA SKIP
             bookmakers = match.get("bookmakers", [])
             bm_list = [bm.get("key", "?") for bm in bookmakers]
             logging.warning(f"[DEBUG] Skip {match_name}: Bookmakers: {bm_list} | Markets ada: {[m.get('key') for bm in bookmakers for m in bm.get('markets', [])]}")
             continue
-        
+
         hasil[match_name] = {
             "over"     : ou_data["over"],
             "under"    : ou_data["under"],
             "line"     : ou_data["line"],
             "bookmaker": ou_data["bookmaker"]
         }
-    
+
     logging.info(f"[tos] Transformasi: {len(hasil)} match siap untuk dos.py.")
     return hasil
 
