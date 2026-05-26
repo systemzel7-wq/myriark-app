@@ -338,9 +338,7 @@ if scan_button:
 
                     if status == "PROFIT_READY":
                         st.success(
-                            f"{ikon} **{status}** | `{tid}` | {match}
-
-"
+                            f"{ikon} **{status}** | `{tid}` | {match}"
                             f"Lawan Arah: {hasil.get('close_side','?').upper()} "
                             f"Odds Bandar: {hasil.get('close_odds','?')} | "
                             f"Rekomendasi Min Bet: Rp {close_stake:,.0f} | "
@@ -349,9 +347,7 @@ if scan_button:
                         )
                     elif status == "BEP_READY":
                         st.warning(
-                            f"{ikon} **{status}** | `{tid}` | {match}
-
-"
+                            f"{ikon} **{status}** | `{tid}` | {match}"
                             f"Lawan Arah: {hasil.get('close_side','?').upper()} "
                             f"Odds Bandar: {hasil.get('close_odds','?')} | "
                             f"Rekomendasi Min Bet: Rp {close_stake:,.0f} | "
@@ -360,9 +356,7 @@ if scan_button:
                         )
                     elif status == "WORSE":
                         st.error(
-                            f"{ikon} **{status}** | `{tid}` | {match}
-
-"
+                            f"{ikon} **{status}** | `{tid}` | {match}"
                             f"Odds Lawan: {hasil.get('close_odds','?')} | "
                             f"Biaya Min Bet Membengkak: Rp {close_stake:,.0f} | "
                             f"Arah Pergerakan Tren: {tren}"
