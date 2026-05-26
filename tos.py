@@ -22,7 +22,7 @@ from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
 
 logging.basicConfig(
-    level=logging.INFO,
+    level=logging.DEBUG,  # UBAH dari INFO ke DEBUG
     format="%(asctime)s - %(levelname)s - %(message)s"
 )
 
@@ -160,38 +160,31 @@ def update_teams_db(data_bola):
 # FILTER WAKTU — LIVE + 24 JAM KE DEPAN
 # =========================================================
 def filter_waktu(data_bola):
-    """
-    Filter pertandingan yang relevan untuk diproses:
-    - LIVE (sudah mulai, selisih negatif, maksimal 3 jam lalu) -> masuk
-    - Pre-match dalam 24 jam ke depan -> masuk
-    - Lebih dari 24 jam ke depan -> buang dari RAM
-    - Sudah lewat lebih dari 3 jam -> buang dari RAM
-    Return list pertandingan aktif.
-    """
     now_wita = datetime.now(WITA)
-    hasil    = []
-
+    hasil = []
+    
+    # TAMBAH DEBUGGING DETAIL
     for match in data_bola:
         waktu_str = match.get("commence_time")
         if not waktu_str:
+            logging.warning(f"[DEBUG] Match tanpa commence_time: {match.get('home_team')} vs {match.get('away_team')}")
             continue
         try:
-            kickoff_utc = datetime.fromisoformat(
-                waktu_str.replace("Z", "+00:00")
-            )
+            kickoff_utc = datetime.fromisoformat(waktu_str.replace("Z", "+00:00"))
             kickoff_wita = kickoff_utc.astimezone(WITA)
-        except (ValueError, TypeError):
+        except (ValueError, TypeError) as e:
+            logging.warning(f"[DEBUG] Parse waktu gagal: {waktu_str} - Error: {e}")
             continue
-
+        
         selisih_menit = (kickoff_wita - now_wita).total_seconds() / 60
-
-        # Masuk kalau LIVE max 3 jam lalu (-180) atau pre-match <= 1440 menit (24 jam)
+        
+        # TAMPILKAN SETIAP MATCH & SELISIH WAKTUNYA
+        logging.debug(f"[DEBUG] {match.get('home_team')} vs {match.get('away_team')} | Selisih: {selisih_menit:.0f} menit | Range OK: {-180 <= selisih_menit <= 1440}")
+        
         if -180 <= selisih_menit <= 1440:
             hasil.append(match)
-
-    logging.info(
-        f"[tos] Filter waktu: {len(data_bola)} -> {len(hasil)} aktif."
-    )
+    
+    logging.info(f"[tos] Filter waktu: {len(data_bola)} -> {len(hasil)} aktif.")
     return hasil
 
 
@@ -266,37 +259,32 @@ def ekstrak_ou_odds(match_data):
 # TRANSFORMASI UNTUK dos.py
 # =========================================================
 def transformasi_ke_dos_format(data_aktif):
-    """
-    Ubah list match ke dict yang dos.py butuhkan.
-    Format output: {"home vs away": {over, under, line, bookmaker}}
-    Odds sudah dalam format Indo.
-    Bookmaker sudah diprioritaskan.
-    Nama match sudah dinormalisasi (lowercase, spasi rapi).
-    Return dict.
-    """
     hasil = {}
-
+    
     for match in data_aktif:
         home = match.get("home_team", "").strip()
         away = match.get("away_team", "").strip()
-
+        
         if not home or not away:
             continue
-
+        
         match_name = normalize_match_name(f"{home} vs {away}")
-        ou_data    = ekstrak_ou_odds(match)
-
+        ou_data = ekstrak_ou_odds(match)
+        
         if ou_data is None:
-            logging.debug(f"[tos] Skip {match_name}: tidak ada market totals.")
+            # TAMPILKAN DETAIL MENGAPA SKIP
+            bookmakers = match.get("bookmakers", [])
+            bm_list = [bm.get("key", "?") for bm in bookmakers]
+            logging.warning(f"[DEBUG] Skip {match_name}: Bookmakers: {bm_list} | Markets ada: {[m.get('key') for bm in bookmakers for m in bm.get('markets', [])]}")
             continue
-
+        
         hasil[match_name] = {
-            "over"     : ou_data["over"],
-            "under"    : ou_data["under"],
-            "line"     : ou_data["line"],
+            "over": ou_data["over"],
+            "under": ou_data["under"],
+            "line": ou_data["line"],
             "bookmaker": ou_data["bookmaker"]
         }
-
+    
     logging.info(f"[tos] Transformasi: {len(hasil)} match siap untuk dos.py.")
     return hasil
 
