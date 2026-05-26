@@ -23,6 +23,7 @@ from zoneinfo import ZoneInfo
 
 logging.basicConfig(
     level=logging.DEBUG,  # UBAH dari INFO ke DEBUG
+    level=logging.INFO,
     format="%(asctime)s - %(levelname)s - %(message)s"
 )
 
