@@ -31,7 +31,7 @@ logging.basicConfig(
 # =========================================================
 WITA        = ZoneInfo("Asia/Makassar")
 UTC         = timezone.utc
-REGIONS     = "uk"
+REGIONS     = "us,au"
 MARKETS     = "totals"
 ODDS_FORMAT = "decimal"
 TEAMS_DB    = "teams_db.json"
