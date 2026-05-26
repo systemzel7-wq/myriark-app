@@ -263,8 +263,7 @@ with col_auto:
     auto_refresh_placebo = st.checkbox("🔄 Auto-Refresh Layar (30 detik)")
 
 if auto_refresh_placebo:
-    time.sleep(30)
-    st.rerun()
+    st.caption("⏳ Mode aktif. (Silakan tarik layar ke bawah untuk refresh manual agar server aman)")
 
 # =========================================================
 # PIPELINE EKSEKUSI UTAMA (HANYA AKTIF JIKA TOMBOL DIKLIK)
