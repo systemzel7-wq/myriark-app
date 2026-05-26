@@ -1,4 +1,3 @@
-\
 """
 app.py — Myriark Sniper Dashboard (Modular Version)
 Versi 2.1 — Edisi Proteksi Kuota API (Brankas Waktu & Placebo Refresh)
@@ -220,7 +219,7 @@ else:
             tid = tiket.get("ticket_id", "?")
             with col1: st.write(f"`{tid}`")
             with col2: st.write(tiket.get("match", "?"))
-            with col3: st.write(tiket.get("entry_side", "?").upper())
+            with col3: st.write((tiket.get("entry_side", "?") or "?").upper())
             with col4: st.write(tiket.get("entry_line", "?"))
             with col5: st.write(tiket.get("entry_odds", "?"))
             with col6: st.write(f"Rp {tiket.get('entry_stake', 0):,.0f}")
@@ -328,7 +327,7 @@ if scan_button:
                     match       = hasil.get("match", "?")
                     tid         = hasil.get("ticket_id", "?")
                     tren        = hasil.get("tren", "?")
-                    close_stake = hasil.get("close_stake")
+                    close_stake = hasil.get("close_stake", 0) or 0
                     total       = hasil.get("total_result", 0)
 
                     if status in ["NO_LIVE", "NO_ODDS"]:
